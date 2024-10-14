@@ -7,23 +7,165 @@ import {
   Typography,
 } from "@material-tailwind/react";
 import Link from "next/link";
-
+import { useEffect, useState } from 'react';
+import { useAuthContext } from "@/hooks/useAuthContext";
+import { signInWithPopup } from "firebase/auth";
+import { auth, googleProvider } from '@/lib/firebase/firebaseClient';
+import { validateEmail } from "@/lib/utils/helper";
 
 export function LoginSection() {
+  const { authState, loginSuccess, loginError } = useAuthContext();
+  const [credentials, setCredentials] = useState({ email: '', password: ''});
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  useEffect(() => {
+    if (!authState.isSignedIn) {
+      setSuccess('');
+      setError('');
+    }
+  }, [authState])
+
+  const handleCredentialChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (success) setSuccess('');
+    if (error) setError('');
+    const { name, value } = event.target;
+    setCredentials((prevCredentials) => ({
+      ...prevCredentials,
+      [name]: value,
+    }));
+  }
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (error) setError("");
+    if (success) setSuccess("");
+    // validate email and password
+    if (!validateEmail(credentials.email)) return setError('Email is invalid');
+    if (credentials.password.length < 6) return setError('Password length is not enough'); 
+    
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: credentials.email, password: credentials.password }),
+    });
+
+    if (response.ok) {
+      const responseJson = await response.json();
+      const userInfo = responseJson.data;
+
+      loginSuccess({ 
+        isSignedIn: true, 
+        loading: false,
+        userId: userInfo.userId,
+        displayName: userInfo.displayName ? userInfo.displayName : '',
+        photoURL: userInfo.photoURL ? userInfo.photoURL : '',
+        token: userInfo.token,
+        exp: userInfo.exp,
+        email: credentials.email,
+        error: false,
+        errorMessage: ''
+      })
+      setSuccess('Login success');
+    } else {
+      const responseJson = await response.json();
+      setError(responseJson.message);
+    }
+  };
+
+  // for Google signin, check if customer signin the first time, then create add user customer type into db and update auth
+  // if customer already has profile, update auth
+  const handleGoogleSignIn = async () => {
+    if (error) setError('');
+    if (success) setSuccess('');
+
+    try {
+      // const result = await signInWithRedirect(auth, googleProvider);
+      const { providerId, user } = await signInWithPopup(auth, googleProvider);
+
+      // get user profile with token
+      let token = await user.getIdToken();
+      let { claims } = await user.getIdTokenResult();
+
+      const url = `${process.env.NEXT_PUBLIC_API_URL}/self/profile`
+      let response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+      });
+
+      // success get user profile, update auth state
+      if (response.ok) {
+        let userProfile = await response.json();
+
+        loginSuccess({ 
+          isSignedIn: true,
+          userId: userProfile.data.userId,
+          displayName: userProfile.data.displayName ? userProfile.data.displayName : '',
+          photoURL: userProfile.data.photoURL ? userProfile.data.photoURL : '',
+          loading: false,
+          token: token,
+          exp: typeof claims.exp === 'number' ? claims.exp : 0,
+          email: user.email ? user.email : "",
+          error: false,
+          errorMessage: ''
+        })
+        return setSuccess('Login success');
+      }
+
+      // user profile not found, create new customer user in db
+      const newCustomerSignInUrl = `${process.env.NEXT_PUBLIC_API_URL}/users/customers`
+      let addNewCustomerRes = await fetch(newCustomerSignInUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ email: user.email, uid: user.uid, displayName: user.displayName, requestType: 'new-customer', signinProvider: providerId, photoURL: user.photoURL, emailVerified: user.emailVerified }),
+      });
+
+      // create new customer user success, update auth state 
+      if (addNewCustomerRes.ok) {
+        let responseData = await addNewCustomerRes.json();
+
+        loginSuccess({ 
+          isSignedIn: true,
+          userId: responseData.userId,
+          displayName: user.displayName ? user.displayName : '',
+          photoURL: user.photoURL ? user.photoURL : '',
+          loading: false,
+          token: token,
+          exp: typeof claims.exp === 'number' ? claims.exp : 0,
+          email: user.email ? user.email : "",
+          error: false,
+          errorMessage: ''
+        })
+        return setSuccess('Login success');
+      }
+    } catch (error) {
+      console.error("Error signing in with Google:", error);
+      return setError('Login with Google failed')
+    }
+  };
+
   return (
-    <section className="m-8 flex items-center justify-center gap-4 h-[80vh]">
+    <section className="m-4 flex items-center justify-center gap-4 h-[80vh]">
       <div className="w-full lg:w-3/5 mt-24">
         <div className="text-center">
-          <Typography variant="h2" className="font-bold mb-4" placeholder="" onPointerEnterCapture={() => {}} onPointerLeaveCapture={() => {}}>Sign In</Typography>
-          <Typography variant="paragraph" color="blue-gray" className="text-lg font-normal" placeholder="" onPointerEnterCapture={() => {}} onPointerLeaveCapture={() => {}}>Enter your email and password to Sign In.</Typography>
+          <Typography variant="h2" className="font-bold mb-4" placeholder="" onPointerEnterCapture={() => {}} onPointerLeaveCapture={() => {}}>Login</Typography>
+          {/* <Typography variant="paragraph" color="blue-gray" className="text-lg font-normal" placeholder="" onPointerEnterCapture={() => {}} onPointerLeaveCapture={() => {}}>Enter your email and password to Sign In.</Typography> */}
         </div>
-        <form className="mt-8 mb-2 mx-auto w-80 max-w-screen-lg lg:w-1/2">
+        <form className="mt-8 mb-2 mx-auto w-80 max-w-screen-lg lg:w-1/2" onSubmit={handleLogin}>
           <div className="mb-1 flex flex-col gap-6">
             <Typography variant="small" color="blue-gray" className="-mb-3 font-medium" placeholder="" onPointerEnterCapture={() => {}} onPointerLeaveCapture={() => {}}>
               Email
             </Typography>
             <Input
               size="lg"
+              name="email"
+              type="email"
               placeholder="name@mail.com"
               className=" !border-t-blue-gray-200 focus:!border-t-gray-900"
               onPointerEnterCapture={() => {}} 
@@ -32,6 +174,8 @@ export function LoginSection() {
               labelProps={{
                 className: "before:content-none after:content-none",
               }}
+              value={credentials.email}
+              onChange={handleCredentialChange}
             />
             <Typography variant="small" color="blue-gray" className="-mb-3 font-medium" placeholder="" onPointerEnterCapture={() => {}} 
               onPointerLeaveCapture={() => {}}>
@@ -39,6 +183,7 @@ export function LoginSection() {
             </Typography>
             <Input
               type="password"
+              name="password"
               size="lg"
               placeholder="********"
               className=" !border-t-blue-gray-200 focus:!border-t-gray-900"
@@ -48,6 +193,8 @@ export function LoginSection() {
               labelProps={{
                 className: "before:content-none after:content-none",
               }}
+              value={credentials.password}
+              onChange={handleCredentialChange}
             />
           </div>
           <Checkbox
@@ -69,19 +216,21 @@ export function LoginSection() {
             containerProps={{ className: "-ml-2.5" }}
           />
           <Button 
-            className="mt-6" 
+            className="mt-4" 
             fullWidth 
             onPointerEnterCapture={() => {}} 
             onPointerLeaveCapture={() => {}}
             placeholder
+            type='submit'
           >
             Sign In
           </Button>
-
+          {error && <p className="text-sm text-red-800 mt-[1rem]">{error}</p>}
+          {success && <p className="text-sm text-green-900 mt-[1rem]">{success}</p>}
           <div className="flex justify-end gap-2 mt-6">
             <Typography 
               variant="small" 
-              className="font-medium text-gray-900 mr-2" 
+              className="font-medium text-blue-700 mr-2" 
               onPointerEnterCapture={() => {}} 
               onPointerLeaveCapture={() => {}}
               placeholder
@@ -91,8 +240,22 @@ export function LoginSection() {
               </Link>
             </Typography>
           </div>
-          <div className="space-y-4 mt-8">
-            <Button size="lg" color="blue-gray" variant="outlined" className="flex items-center gap-2 justify-center shadow-md" fullWidth onPointerEnterCapture={() => {}} onPointerLeaveCapture={() => {}} placeholder>
+
+          <div className="flex items-center text-center mt-4">
+            <hr className="flex-grow border-t border-gray-300 mx-6"></hr>
+            <span className="text-gray-500">or</span>
+            <hr className="flex-grow border-t border-gray-300 mx-6"></hr>
+          </div>
+
+          <div className="space-y-4 mt-6">
+            <Button 
+              size="lg" 
+              color="blue-gray" 
+              variant="outlined" 
+              className="flex items-center gap-2 justify-center shadow-md" fullWidth 
+              onPointerEnterCapture={() => {}} onPointerLeaveCapture={() => {}} placeholder
+              onClick={handleGoogleSignIn}
+            >
               <svg width="17" height="16" viewBox="0 0 17 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <g clipPath="url(#clip0_1156_824)">
                   <path d="M16.3442 8.18429C16.3442 7.64047 16.3001 7.09371 16.206 6.55872H8.66016V9.63937H12.9813C12.802 10.6329 12.2258 11.5119 11.3822 12.0704V14.0693H13.9602C15.4741 12.6759 16.3442 10.6182 16.3442 8.18429Z" fill="#4285F4" />
@@ -111,7 +274,7 @@ export function LoginSection() {
           </div>
           <Typography variant="paragraph" className="text-center text-gray-900 font-medium mt-4" onPointerEnterCapture={() => {}} onPointerLeaveCapture={() => {}} placeholder>
             Not registered?
-            <Link href="/auth/register"  className="text-blue-gray-500 ml-1">Create account</Link>
+            <Link href="/auth/register"  className="text-blue-700 ml-1">Create account</Link>
           </Typography>
         </form>
 
